@@ -120,6 +120,8 @@ android {
 
     buildTypes {
         debug {
+            applicationIdSuffix = ".optimized"
+            versionNameSuffix = "-optimized"
             buildConfigField(
                 "String",
                 "TEST_OPENROUTER_API_KEY",

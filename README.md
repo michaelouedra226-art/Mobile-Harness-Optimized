@@ -341,6 +341,11 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 ./gradlew lintDebug
 ```
 
+### Download an optimized test APK
+Every push to `main` runs the **Build Android APK** GitHub Actions workflow. To build it manually, open **Actions → Build Android APK → Run workflow**. After a successful run, download the `mobile-harness-optimized-online-debug` artifact from the run summary and extract the APK.
+
+The debug build uses the separate application ID `com.jarves.mh.optimized`, so it can be installed alongside the official app without uninstalling it or overwriting its local data. This is a test build, not an official Mobile Harness release. Android debug signing is not a production release signature.
+
 ### Target Profiles
 * **Direct Sideload APK** (Default): Targets API 28 to preserve proven userspace execution paths under Android 10-14.
 * **Google Play Compliance Build**:
