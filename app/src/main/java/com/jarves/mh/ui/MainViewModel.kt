@@ -96,6 +96,8 @@ internal fun sanitizeTerminalOutput(text: String): String = text
     .replace(ANSI_TERMINAL_SEQUENCE, "")
     .filter { it == '\n' || it == '\r' || it == '\t' || it.code >= 0x20 }
 
+private const val TERMINAL_UI_REFRESH_INTERVAL_MS = 100L
+
 private val ANTIGRAVITY_MODEL_EFFORT = Regex("^(.*)-(low|medium|high)$")
 
 private fun antigravityEffortFromModel(model: String): String? =
@@ -456,8 +458,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     terminalProcess = proc
                     val native = proc as? NativeSpawnProcess
                     var offset = 0L
-                    val streamed = StringBuilder()
+                    val streamed = BoundedTextBuffer(MAX_PROJECT_TERMINAL_OUTPUT)
                     var autoConfirmed = false
+                    var lastUiUpdateAt = 0L
                     while (proc.isAlive || (native?.outputFile?.length() ?: 0L) > offset) {
                         val file = native?.outputFile
                         val available = (file?.length() ?: 0L) - offset
@@ -473,13 +476,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         if (count > 0) {
                             offset += count
                             streamed.append(bytes.decodeToString(0, count))
-                            _terminalLiveOutput.value = sanitizeTerminalOutput(streamed.toString())
-                                .trimEnd()
-                                .takeLast(MAX_PROJECT_TERMINAL_OUTPUT)
-                            if (!autoConfirmed && shouldAutoConfirmPackageCommand(command, streamed.toString())) {
+                            if (!autoConfirmed && shouldAutoConfirmPackageCommand(command, streamed.takeLast(500))) {
                                 proc.outputStream.write("y\n".toByteArray())
                                 proc.outputStream.flush()
                                 autoConfirmed = true
+                            }
+                            val now = SystemClock.elapsedRealtime()
+                            if (now - lastUiUpdateAt >= TERMINAL_UI_REFRESH_INTERVAL_MS) {
+                                _terminalLiveOutput.value = sanitizeTerminalOutput(streamed.toString()).trimEnd()
+                                lastUiUpdateAt = now
                             }
                         }
                     }
@@ -490,7 +495,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     finalOut to exit
                 }.getOrElse { "Error: ${it.message}" to 1 }
             }
-            _terminalLines.update { it + TerminalOutputLine(command = command, output = output, exitCode = exitCode) }
+            _terminalLines.update {
+                (it + TerminalOutputLine(command = command, output = output, exitCode = exitCode))
+                    .takeLast(MAX_PROJECT_TERMINAL_HISTORY)
+            }
             _terminalLiveOutput.value = ""
             _terminalCurrentCommand.value = null
             _isTerminalRunning.value = false
@@ -593,7 +601,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 exitCode = result.exitCode,
             )
             val updatedLines = (existingLines + completedLine).takeLast(MAX_PROJECT_TERMINAL_HISTORY)
-            saveProjectTerminal(project.id, result.cwd, updatedLines)
+            withContext(Dispatchers.IO) { saveProjectTerminal(project.id, result.cwd, updatedLines) }
             if (_state.value.activeProject?.id == project.id) {
                 _state.update {
                     it.copy(
@@ -668,8 +676,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val native = process as? NativeSpawnProcess
             ?: return ProjectTerminalResult("Unsupported terminal process.", 1, cwd)
         var offset = 0L
-        val output = StringBuilder()
+        val output = BoundedTextBuffer(MAX_PROJECT_TERMINAL_OUTPUT)
         var autoConfirmed = false
+        var lastUiUpdateAt = 0L
         while (process.isAlive || native.outputFile.length() > offset) {
             val available = native.outputFile.length() - offset
             if (available <= 0) {
@@ -684,22 +693,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (count > 0) {
                 offset += count
                 output.append(bytes.decodeToString(0, count))
-                val visible = sanitizeTerminalOutput(output.toString().substringBefore(marker))
-                    .takeLast(MAX_PROJECT_TERMINAL_OUTPUT)
-                if (!autoConfirmed && shouldAutoConfirmPackageCommand(command, visible)) {
+                if (!autoConfirmed && shouldAutoConfirmPackageCommand(command, output.takeLast(500))) {
                     process.outputStream.write("y\n".toByteArray())
                     process.outputStream.flush()
                     autoConfirmed = true
                 }
-                val detectedPreviewUrl = detectPreviewUrl(visible)
-                _state.update { current ->
-                    if (current.activeProject?.id == projectId) {
-                        current.copy(
-                            projectTerminalLiveOutput = visible,
-                            previewReady = current.previewReady || detectedPreviewUrl != null,
-                            previewUrl = detectedPreviewUrl ?: current.previewUrl,
-                        )
-                    } else current
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastUiUpdateAt >= TERMINAL_UI_REFRESH_INTERVAL_MS) {
+                    val visible = output.toString().substringBefore(marker)
+                    val cleanVisible = sanitizeTerminalOutput(visible).takeLast(MAX_PROJECT_TERMINAL_OUTPUT)
+                    val detectedPreviewUrl = detectPreviewUrl(cleanVisible)
+                    _state.update { current ->
+                        if (current.activeProject?.id == projectId) {
+                            current.copy(
+                                projectTerminalLiveOutput = cleanVisible,
+                                previewReady = current.previewReady || detectedPreviewUrl != null,
+                                previewUrl = detectedPreviewUrl ?: current.previewUrl,
+                            )
+                        } else current
+                    }
+                    lastUiUpdateAt = now
                 }
             }
         }

@@ -4176,6 +4176,9 @@ private fun FileViewerScreen(
     val fileName = filePath.substringAfterLast('/')
     val ext = fileName.substringAfterLast('.', "")
     val isMarkdown = ext == "md"
+    val codeLines = remember(content, isMarkdown) {
+        if (content != null && !isMarkdown) content.lines() else emptyList()
+    }
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
     var copied by remember { mutableStateOf(false) }
@@ -4238,8 +4241,7 @@ private fun FileViewerScreen(
                             .fillMaxSize()
                             .background(Color(0xFF0D1117)),
                     ) {
-                        val lines = content.lines()
-                        items(lines.size) { idx ->
+                        items(codeLines.size) { idx ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -4257,7 +4259,7 @@ private fun FileViewerScreen(
                                     textAlign = TextAlign.End,
                                 )
                                 Text(
-                                    text = lines[idx],
+                                    text = codeLines[idx],
                                     modifier = Modifier
                                         .weight(1f)
                                         .padding(end = 12.dp),
@@ -4286,20 +4288,23 @@ private fun FilesTab(
     onExport: () -> Unit,
 ) {
     var expandedDirectories by rememberSaveable { mutableStateOf(emptyList<String>()) }
-    LaunchedEffect(files.map { it.path }) {
-        val directories = files.asSequence().filter { it.isDirectory }.map { it.path }.toSet()
-        expandedDirectories = expandedDirectories.filter { it in directories }
+    val directoryPaths = remember(files) { files.asSequence().filter { it.isDirectory }.map { it.path }.toSet() }
+    LaunchedEffect(directoryPaths) {
+        expandedDirectories = expandedDirectories.filter { it in directoryPaths }
     }
-    val expandedSet = expandedDirectories.toSet()
-    val visibleFiles = files.filter { entry ->
-        val segments = entry.path.split('/')
-        segments.size == 1 || (1 until segments.size).all { depth ->
-            segments.take(depth).joinToString("/") in expandedSet
+    val expandedSet = remember(expandedDirectories) { expandedDirectories.toSet() }
+    val visibleFiles = remember(files, expandedSet) {
+        files.filter { entry ->
+            val segments = entry.path.split('/')
+            segments.size == 1 || (1 until segments.size).all { depth ->
+                segments.take(depth).joinToString("/") in expandedSet
+            }
         }
     }
-    val directChildCounts = files.filter { candidate ->
-        candidate.path.contains('/')
-    }.groupingBy { candidate -> candidate.path.substringBeforeLast('/') }.eachCount()
+    val directChildCounts = remember(files) {
+        files.filter { candidate -> candidate.path.contains('/') }
+            .groupingBy { candidate -> candidate.path.substringBeforeLast('/') }.eachCount()
+    }
 
     LazyColumn(contentPadding = PaddingValues(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         item {
